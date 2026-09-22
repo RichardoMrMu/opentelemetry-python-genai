@@ -1400,6 +1400,41 @@ class TestOnLlmEndToolCalls:
         assert part.name == "get_weather"
         assert part.id == "call_ollama_1"
         assert part.arguments == {"city": "Seattle"}
+        # done_reason must resolve finish_reason to "stop", not "error".
+        assert assigned[0].finish_reason == "stop"
+        assert llm_inv.finish_reasons == ["stop"]
+
+    def test_response_with_both_text_and_tool_calls_preserves_both(self):
+        """A response carrying both assistant text and tool calls must
+        keep both: gating only on tool calls previously dropped the text.
+        """
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        tool_call = {
+            "name": "get_weather",
+            "id": "call_1",
+            "args": {"city": "Seattle"},
+        }
+        ai_msg = AIMessage(
+            content="Checking the weather...",
+            tool_calls=[tool_call],
+            response_metadata={},
+        )
+        gen = ChatGeneration(
+            message=ai_msg, generation_info={"finish_reason": "tool_calls"}
+        )
+        response = LLMResult(generations=[[gen]])
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        assigned: list[OutputMessage] = llm_inv.output_messages
+        assert len(assigned) == 1
+        assert len(assigned[0].parts) == 2
+        assert isinstance(assigned[0].parts[0], TextPart)
+        assert assigned[0].parts[0].content == "Checking the weather..."
+        assert isinstance(assigned[0].parts[1], ToolCallRequestPart)
+        assert assigned[0].parts[1].name == "get_weather"
 
     def test_no_tool_calls_still_records_text(self):
         """A response with no tool calls keeps recording its text content,
