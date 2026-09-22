@@ -30,7 +30,7 @@ from opentelemetry.instrumentation.genai.langchain.operation_mapping import (
     resolve_agent_name,
 )
 from opentelemetry.instrumentation.genai.langchain.utils import (
-    _legacy_function_call_request,
+    _ai_message_parts,
     _message_name,
     _normalize_role,
     extract_token_details,
@@ -58,7 +58,6 @@ from opentelemetry.util.genai.types import (
     OutputMessage,
     Role,
     TextPart,
-    ToolCallRequestPart,
 )
 
 SUPPORTED_RAPI_RESPONSE_HEADERS = ("x-ms-served-model",)
@@ -515,7 +514,12 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                     chat_generation, "generation_info", None
                 )
                 if generation_info is not None:
-                    finish_reason = generation_info.get("finish_reason")
+                    # ChatOllama spells its stop reason `done_reason`;
+                    # fall back to it so a successful run is not later
+                    # recorded as `"error"`.
+                    finish_reason = generation_info.get(
+                        "finish_reason"
+                    ) or generation_info.get("done_reason")
 
                 if chat_generation.message:
                     # Responses API (RAPI) may include the served model in the
@@ -555,66 +559,35 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                             or chat_generation.message.response_metadata.get(
                                 "stop_reason"
                             )
+                            or chat_generation.message.response_metadata.get(
+                                "done_reason"
+                            )
                         )
                     finish_reason = finish_reason or "error"
 
                     name_str = _message_name(chat_generation.message)
 
-                    # Gate on the presence of tool calls, not the provider's
-                    # finish-reason spelling. ChatOllama reports its stop
-                    # reason as `done_reason` (so `finish_reason` resolves
-                    # to `"error"` above), and an allowlist of
-                    # `("tool_calls", "tool_use")` would drop its
-                    # `message.tool_calls` from the output message.
-                    message_tool_calls = chat_generation.message.tool_calls
-                    if message_tool_calls:
-                        tool_calls: list[ToolCallRequestPart] = []
-                        for tool_call in message_tool_calls:
-                            tool_call_request = ToolCallRequestPart(
-                                name=tool_call["name"],
-                                id=tool_call["id"],
-                                arguments=tool_call["args"],
-                            )
-                            tool_calls.append(tool_call_request)
-                        output_message = OutputMessage(
-                            role=_normalize_role(chat_generation.message)
-                            or Role.ASSISTANT.value,
-                            parts=cast(list[MessagePart], tool_calls),
-                            finish_reason=finish_reason,
-                            name=name_str,
-                        )
-                    elif (
-                        legacy_call := _legacy_function_call_request(
-                            chat_generation.message
-                        )
-                    ) is not None:
-                        # Pre-tools OpenAI ``function_call`` present in
-                        # ``additional_kwargs`` — surface it as a tool-call
-                        # request part like the modern ``tool_calls`` path.
-                        output_message = OutputMessage(
-                            role=_normalize_role(chat_generation.message)
-                            or Role.ASSISTANT.value,
-                            parts=cast(list[MessagePart], [legacy_call]),
-                            finish_reason=finish_reason,
-                            name=name_str,
-                        )
-                    else:
-                        parts = [
+                    # Build parts via ``_ai_message_parts`` so assistant text
+                    # (and reasoning) is preserved alongside tool calls when a
+                    # response carries both, and legacy ``function_call`` is
+                    # still surfaced. Gating only on ``tool_calls`` previously
+                    # dropped the text; falling back to a bare ``TextPart``
+                    # dropped the tool calls.
+                    message_parts = _ai_message_parts(chat_generation.message)
+                    if not message_parts:
+                        message_parts = [
                             TextPart(
                                 content=chat_generation.message.content,
                                 type="text",
                             )
                         ]
-                        role = (
-                            _normalize_role(chat_generation.message)
-                            or Role.ASSISTANT.value
-                        )
-                        output_message = OutputMessage(
-                            role=role,
-                            parts=cast(list[MessagePart], parts),
-                            finish_reason=finish_reason,
-                            name=name_str,
-                        )
+                    output_message = OutputMessage(
+                        role=_normalize_role(chat_generation.message)
+                        or Role.ASSISTANT.value,
+                        parts=cast(list[MessagePart], message_parts),
+                        finish_reason=finish_reason,
+                        name=name_str,
+                    )
                     output_messages.append(output_message)
                     finish_reasons.append(finish_reason)
 
