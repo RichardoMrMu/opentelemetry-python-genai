@@ -1367,6 +1367,62 @@ class TestOnLlmEndToolCalls:
         assert len(assigned) == 1
         assert assigned[0].name == "tool_caller_bot"
 
+    def test_ollama_done_reason_preserves_tool_calls(self):
+        """ChatOllama reports its stop reason as `done_reason` and sets no
+        `finish_reason`/`stop_reason`. The tool-call parts must still be
+        recorded rather than dropped because the finish reason resolves to
+        `"error"`.
+        """
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        tool_call = {
+            "name": "get_weather",
+            "id": "call_ollama_1",
+            "args": {"city": "Seattle"},
+        }
+        # ChatOllama publishes the stop reason under `done_reason` only.
+        ai_msg = AIMessage(
+            content="", tool_calls=[tool_call], response_metadata={}
+        )
+        gen = ChatGeneration(
+            message=ai_msg, generation_info={"done_reason": "stop"}
+        )
+        response = LLMResult(generations=[[gen]])
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        assigned: list[OutputMessage] = llm_inv.output_messages
+        assert len(assigned) == 1
+        assert len(assigned[0].parts) == 1
+        part = assigned[0].parts[0]
+        assert isinstance(part, ToolCallRequestPart)
+        assert part.name == "get_weather"
+        assert part.id == "call_ollama_1"
+        assert part.arguments == {"city": "Seattle"}
+
+    def test_no_tool_calls_still_records_text(self):
+        """A response with no tool calls keeps recording its text content,
+        independent of the finish-reason spelling.
+        """
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        ai_msg = AIMessage(content="Sunny, 18C", response_metadata={})
+        gen = ChatGeneration(
+            message=ai_msg, generation_info={"done_reason": "stop"}
+        )
+        response = LLMResult(generations=[[gen]])
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        assigned: list[OutputMessage] = llm_inv.output_messages
+        assert len(assigned) == 1
+        assert len(assigned[0].parts) == 1
+        part = assigned[0].parts[0]
+        assert isinstance(part, TextPart)
+        assert part.content == "Sunny, 18C"
+
 
 # ---------------------------------------------------------------------------
 # on_retriever_start / on_retriever_end / on_retriever_error

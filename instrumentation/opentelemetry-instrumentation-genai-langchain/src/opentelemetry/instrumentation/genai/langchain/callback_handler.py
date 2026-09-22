@@ -560,9 +560,16 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
 
                     name_str = _message_name(chat_generation.message)
 
-                    if finish_reason in ("tool_calls", "tool_use"):
+                    # Gate on the presence of tool calls, not the provider's
+                    # finish-reason spelling. ChatOllama reports its stop
+                    # reason as `done_reason` (so `finish_reason` resolves
+                    # to `"error"` above), and an allowlist of
+                    # `("tool_calls", "tool_use")` would drop its
+                    # `message.tool_calls` from the output message.
+                    message_tool_calls = chat_generation.message.tool_calls
+                    if message_tool_calls:
                         tool_calls: list[ToolCallRequestPart] = []
-                        for tool_call in chat_generation.message.tool_calls:
+                        for tool_call in message_tool_calls:
                             tool_call_request = ToolCallRequestPart(
                                 name=tool_call["name"],
                                 id=tool_call["id"],
