@@ -1374,7 +1374,10 @@ class TestOnLlmEndToolCalls:
         `"error"`.
         """
         run_id = _run_id()
-        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+        handler, telemetry, llm_inv = _make_handler_with_llm_invocation(
+            run_id
+        )
+        telemetry.should_capture_content.return_value = True
 
         tool_call = {
             "name": "get_weather",
@@ -1409,7 +1412,10 @@ class TestOnLlmEndToolCalls:
         keep both: gating only on tool calls previously dropped the text.
         """
         run_id = _run_id()
-        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+        handler, telemetry, llm_inv = _make_handler_with_llm_invocation(
+            run_id
+        )
+        telemetry.should_capture_content.return_value = True
 
         tool_call = {
             "name": "get_weather",
@@ -1435,6 +1441,37 @@ class TestOnLlmEndToolCalls:
         assert assigned[0].parts[0].content == "Checking the weather..."
         assert isinstance(assigned[0].parts[1], ToolCallRequestPart)
         assert assigned[0].parts[1].name == "get_weather"
+
+    def test_content_capture_disabled_skips_output_message_but_keeps_finish_reason(
+        self,
+    ):
+        """With content capture off, no output message is built (so an
+        image payload is never decoded), but finish reasons are still
+        recorded."""
+        run_id = _run_id()
+        handler, telemetry, llm_inv = _make_handler_with_llm_invocation(
+            run_id
+        )
+        telemetry.should_capture_content.return_value = False
+
+        ai_msg = AIMessage(
+            content="Checking the weather...",
+            tool_calls=[
+                {"name": "get_weather", "id": "c1", "args": {"city": "X"}}
+            ],
+            response_metadata={},
+        )
+        gen = ChatGeneration(
+            message=ai_msg, generation_info={"finish_reason": "tool_calls"}
+        )
+        response = LLMResult(generations=[[gen]])
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        # No output message recorded when capture is disabled ...
+        assert llm_inv.output_messages == []
+        # ... but the finish reason is still collected.
+        assert llm_inv.finish_reasons == ["tool_calls"]
 
     def test_no_tool_calls_still_records_text(self):
         """A response with no tool calls keeps recording its text content,
