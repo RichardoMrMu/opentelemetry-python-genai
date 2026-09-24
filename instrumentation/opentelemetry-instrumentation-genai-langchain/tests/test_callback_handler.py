@@ -1438,9 +1438,7 @@ class TestOnLlmEndToolCalls:
         `"error"`.
         """
         run_id = _run_id()
-        handler, telemetry, llm_inv = _make_handler_with_llm_invocation(
-            run_id
-        )
+        handler, telemetry, llm_inv = _make_handler_with_llm_invocation(run_id)
         telemetry.should_capture_content.return_value = True
 
         tool_call = {
@@ -1476,9 +1474,7 @@ class TestOnLlmEndToolCalls:
         keep both: gating only on tool calls previously dropped the text.
         """
         run_id = _run_id()
-        handler, telemetry, llm_inv = _make_handler_with_llm_invocation(
-            run_id
-        )
+        handler, telemetry, llm_inv = _make_handler_with_llm_invocation(run_id)
         telemetry.should_capture_content.return_value = True
 
         tool_call = {
@@ -1513,9 +1509,7 @@ class TestOnLlmEndToolCalls:
         image payload is never decoded), but finish reasons are still
         recorded."""
         run_id = _run_id()
-        handler, telemetry, llm_inv = _make_handler_with_llm_invocation(
-            run_id
-        )
+        handler, telemetry, llm_inv = _make_handler_with_llm_invocation(run_id)
         telemetry.should_capture_content.return_value = False
 
         ai_msg = AIMessage(
