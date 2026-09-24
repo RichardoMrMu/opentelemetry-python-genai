@@ -58,7 +58,6 @@ from opentelemetry.util.genai.types import (
     OutputMessage,
     RetrievalDocument,
     Role,
-    TextPart,
 )
 
 SUPPORTED_RAPI_RESPONSE_HEADERS = ("x-ms-served-model",)
@@ -579,36 +578,25 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
 
                     name_str = _message_name(chat_generation.message)
 
-                    # Build parts via ``_ai_message_parts`` so assistant text
-                    # (and reasoning) is preserved alongside tool calls when a
-                    # response carries both, and legacy ``function_call`` is
-                    # still surfaced. Gating only on ``tool_calls`` previously
-                    # dropped the text; falling back to a bare ``TextPart``
-                    # dropped the tool calls.
-                    # Only build the output message (which for image blocks can
-                    # decode the full base64 payload via ``_ai_message_parts``)
-                    # when content capture is enabled; the message would be
-                    # discarded otherwise. Finish reasons, token usage, model,
-                    # and response id are collected unconditionally below.
+                    # Build parts via ``_ai_message_parts`` so text, reasoning
+                    # and tool calls are all preserved. Only decode content when
+                    # capture is enabled; finish reason, usage, model and id are
+                    # collected unconditionally below.
                     if self._telemetry_handler.should_capture_content():
                         message_parts = _ai_message_parts(
                             chat_generation.message
                         )
-                        if not message_parts:
-                            message_parts = [
-                                TextPart(
-                                    content=chat_generation.message.content,
-                                    type="text",
-                                )
-                            ]
-                        output_message = OutputMessage(
-                            role=_normalize_role(chat_generation.message)
-                            or Role.ASSISTANT.value,
-                            parts=cast(list[MessagePart], message_parts),
-                            finish_reason=finish_reason,
-                            name=name_str,
-                        )
-                        output_messages.append(output_message)
+                        # Skip empty messages, consistent with
+                        # ``to_output_messages``.
+                        if message_parts:
+                            output_message = OutputMessage(
+                                role=_normalize_role(chat_generation.message)
+                                or Role.ASSISTANT.value,
+                                parts=cast(list[MessagePart], message_parts),
+                                finish_reason=finish_reason,
+                                name=name_str,
+                            )
+                            output_messages.append(output_message)
                     finish_reasons.append(finish_reason)
 
                     # Get token usage if available
