@@ -1614,16 +1614,16 @@ def test_responses_parse_basic(
 ):
     """Responses.parse() emits a GenAI span like create().
 
-    parse() is the structured-output helper; it issues the same /v1/responses
-    request as create() (so it reuses the create cassette) but does not delegate
-    to the instrumented create(), so it is wrapped separately (#659). It maps to
-    the same inference operation as create() -- the request/response fields are
-    identical -- exactly as chat.completions.parse reuses the completions create
-    wrapper.
+    parse() is the structured-output helper. It does not delegate to the
+    instrumented create(), so it is wrapped separately (#659), but it maps to
+    the same inference operation as create() -- the request/response fields
+    are identical -- exactly as chat.completions.parse reuses the completions
+    create wrapper. The recorded response body is valid structured JSON so
+    the SDK can materialize the ``text_format`` model.
     """
     _skip_if_not_latest()
 
-    with vcr.use_cassette("test_responses_create_basic[content_mode0].yaml"):
+    with vcr.use_cassette("test_responses_parse_basic[content_mode0].yaml"):
         response = openai_client.responses.parse(
             model=DEFAULT_MODEL,
             instructions=SYSTEM_INSTRUCTIONS,
