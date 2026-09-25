@@ -1622,7 +1622,7 @@ async def test_async_responses_parse_basic(
     _skip_if_not_latest()
 
     with vcr.use_cassette(
-        "test_async_responses_create_basic[content_mode0].yaml"
+        "test_async_responses_parse_basic[content_mode0].yaml"
     ):
         response = await async_openai_client.responses.parse(
             model=DEFAULT_MODEL,
