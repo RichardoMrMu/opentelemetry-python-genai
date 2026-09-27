@@ -1647,3 +1647,8 @@ async def test_async_responses_parse_basic(
         span.attributes[OpenAIAttributes.OPENAI_API_TYPE]
         == OpenAIAttributes.OpenaiApiTypeValues.RESPONSES.value
     )
+    # parse(text_format=...) is a structured-output call, so the span records
+    # the JSON output type -- but only the format metadata, never the caller's
+    # Pydantic schema (issue #659).
+    _assert_request_attrs(span, output_type="json")
+    assert "_AsyncParseCalendarEvent" not in str(span.attributes)
