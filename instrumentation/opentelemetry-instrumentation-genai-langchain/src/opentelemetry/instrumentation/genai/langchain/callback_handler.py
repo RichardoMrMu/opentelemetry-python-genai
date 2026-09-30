@@ -54,7 +54,6 @@ from opentelemetry.util.genai.invocation import (
 )
 from opentelemetry.util.genai.types import (
     InputMessage,
-    MessagePart,
     OutputMessage,
     RetrievalDocument,
     Role,
@@ -592,7 +591,7 @@ class OpenTelemetryLangChainCallbackHandler(BaseCallbackHandler):
                             output_message = OutputMessage(
                                 role=_normalize_role(chat_generation.message)
                                 or Role.ASSISTANT.value,
-                                parts=cast(list[MessagePart], message_parts),
+                                parts=message_parts,
                                 finish_reason=finish_reason,
                                 name=name_str,
                             )
