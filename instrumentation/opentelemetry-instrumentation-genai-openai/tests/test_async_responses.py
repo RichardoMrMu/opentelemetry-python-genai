@@ -14,7 +14,7 @@ from openai import (
     BadRequestError,
     NotFoundError,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from opentelemetry.instrumentation.genai.openai import OpenAIInstrumentor
 from opentelemetry.instrumentation.genai.openai.response_wrappers import (
@@ -1652,3 +1652,55 @@ async def test_async_responses_parse_basic(
     # Pydantic schema (issue #659).
     _assert_request_attrs(span, output_type="json")
     assert "_AsyncParseCalendarEvent" not in str(span.attributes)
+
+
+class _AsyncMissingFieldCalendarEvent(BaseModel):
+    # The recorded response never carries this field, so parsing its raw
+    # response fails -- but only when the caller parses it.
+    field_that_is_never_present: str
+
+
+@pytest.mark.skipif(
+    not _HAS_RESPONSES_PARSE,
+    reason="AsyncResponses.parse requires a newer openai SDK",
+)
+@pytest.mark.asyncio()
+async def test_async_responses_with_raw_response_parse_defers_validation(
+    span_exporter, async_openai_client, instrument_no_content, vcr
+):
+    """``with_raw_response.parse()`` keeps validation deferred (async).
+
+    Mirrors the sync test: the instrumentation must not force the SDK's
+    parse while extracting telemetry, so the raw response is returned and
+    validation happens only when the caller parses it.
+    """
+    _skip_if_not_latest()
+
+    with vcr.use_cassette(
+        "test_async_responses_parse_basic[content_mode0].yaml"
+    ):
+        raw_response = (
+            await async_openai_client.responses.with_raw_response.parse(
+                model=DEFAULT_MODEL,
+                instructions=SYSTEM_INSTRUCTIONS,
+                input=USER_ONLY_PROMPT[0]["content"],
+                text_format=_AsyncMissingFieldCalendarEvent,
+                stream=False,
+            )
+        )
+
+        (span,) = span_exporter.get_finished_spans()
+        assert_all_attributes(
+            span,
+            DEFAULT_MODEL,
+            True,
+            "resp_0f4faba17dcd0f1e0069e2f3e4907881909179832ba1237100",
+            "gpt-4o-mini-2024-07-18",
+            22,
+            6,
+            response_service_tier="default",
+        )
+
+        # Validation still happens only when the caller parses.
+        with pytest.raises(ValidationError):
+            raw_response.parse()

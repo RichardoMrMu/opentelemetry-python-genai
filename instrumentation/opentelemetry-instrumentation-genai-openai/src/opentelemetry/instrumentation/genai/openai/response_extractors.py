@@ -40,6 +40,9 @@ if TYPE_CHECKING:
     )
 
 try:
+    from openai._models import (  # pylint: disable=no-name-in-module
+        construct_type,
+    )
     from openai.types.responses.response import Response
     from openai.types.responses.response_function_tool_call import (
         ResponseFunctionToolCall,
@@ -56,6 +59,7 @@ try:
     )
     from openai.types.responses.response_usage import ResponseUsage
 except ImportError:
+    construct_type = None
     Response = None
     ResponseFunctionToolCall = None
     ResponseOutputMessage = None
@@ -910,12 +914,33 @@ def _parse_raw_response(
     response: object,
     request_kwargs: dict[str, object] | None,
 ) -> object:
-    """Return the payload of a non-streaming ``with_raw_response`` result."""
+    """Return the payload of a non-streaming ``with_raw_response`` result.
+
+    The payload is rebuilt from the raw JSON body instead of calling the raw
+    response's ``parse()``: the SDK's parser runs the caller's ``text_format``
+    post-parser (including their Pydantic validators) as soon as it is
+    invoked, so calling it here would surface validation errors during the
+    API call where the uninstrumented SDK leaves validation deferred until
+    the caller parses the raw response themselves. Telemetry extraction is
+    best-effort -- a body that cannot be read or rebuilt is skipped rather
+    than raised.
+    """
     if is_streamed_raw_response(request_kwargs) or not isinstance(
         response, ParsableResponse
     ):
         return response
-    return response.parse()
+    http_response = getattr(response, "http_response", None)
+    content = getattr(http_response, "content", None)
+    try:
+        payload = json.loads(content)
+    except (TypeError, ValueError):
+        return None
+    if Response is None or construct_type is None:
+        return None
+    try:
+        return construct_type(type_=Response, value=payload)
+    except Exception:  # pylint: disable=broad-exception-caught
+        return None
 
 
 def set_invocation_response_attributes(
