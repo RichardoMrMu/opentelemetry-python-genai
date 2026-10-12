@@ -3,7 +3,6 @@
 
 import functools
 import inspect
-import json
 from collections.abc import Callable
 from typing import Any
 
@@ -14,126 +13,55 @@ from google.genai.types import (
 )
 
 from opentelemetry.util.genai.handler import TelemetryHandler
-from opentelemetry.util.genai.utils import bind_arguments, get_signature
+from opentelemetry.util.genai.utils import (
+    bind_arguments,
+    object_to_any_value,
+)
 
 ToolFunction = Callable[..., Any]
-
-
-def _is_primitive(value):
-    return isinstance(value, (str, int, bool, float))
-
-
-def _to_otel_value(python_value):
-    """Coerces parameters to something representable with Open Telemetry."""
-    if python_value is None or _is_primitive(python_value):
-        return python_value
-    if isinstance(python_value, list):
-        return [_to_otel_value(x) for x in python_value]
-    if isinstance(python_value, dict):
-        return {
-            key: _to_otel_value(val) for (key, val) in python_value.items()
-        }
-    if hasattr(python_value, "model_dump"):
-        return python_value.model_dump()
-    if hasattr(python_value, "__dict__"):
-        return _to_otel_value(python_value.__dict__)
-    return repr(python_value)
-
-
-# There is no canonical way to serialize a Python object to a span attribute value.
-# Span attribute values currently must be one of the primitive types, or a homogeneous list of primitive types.
-# In the future the value will be expanded to include None, heterogeneous lists of primitive types, and a Map of these types.
-# See https://github.com/open-telemetry/opentelemetry-specification/pull/4485
-def _get_function_args(wrapped_function, function_args, function_kwargs):
-    """Records the details about a function invocation as span attributes."""
-    function_arg_attr = {}
-    try:
-        signature = get_signature(wrapped_function)
-        parameters = list(signature.parameters.values())
-        has_variadics = any(
-            parameter.kind
-            in (
-                inspect.Parameter.VAR_POSITIONAL,
-                inspect.Parameter.VAR_KEYWORD,
-            )
-            for parameter in parameters
-        )
-    except (TypeError, ValueError):
-        has_variadics = False
-        parameters = []
-
-    if has_variadics:
-        bound = {
-            (
-                parameters[index].name
-                if index < len(parameters)
-                else f"args[{index}]"
-            ): value
-            for index, value in enumerate(function_args)
-        }
-        bound.update(function_kwargs)
-    else:
-        bound = bind_arguments(
-            wrapped_function,
-            function_args,
-            function_kwargs,
-            apply_defaults=False,
-        )
-
-    for key, value in bound.items():
-        function_arg_attr[f"code.function.parameters.{key}.type"] = type(
-            value
-        ).__name__
-        function_arg_attr[f"code.function.parameters.{key}.value"] = (
-            _to_otel_value(value)
-        )
-    return function_arg_attr
 
 
 def _wrap_tool_function(
     tool_function: ToolFunction,
     telemetry_handler: TelemetryHandler,
-):
+) -> ToolFunction:
     if inspect.iscoroutinefunction(tool_function):
 
         @functools.wraps(tool_function)
-        async def wrapped_function(*args, **kwargs):
-            # Always json.dumps. First we convert args / result to something that we can serialize, then we serialize.
-            # The return value of _to_otel_value could be a dict, which currently cannot be a span attribute..
-            # In the future that could change (see https://github.com/open-telemetry/opentelemetry-specification/pull/4485), and we could possibly stop using json.dumps here.
+        async def async_wrapped_function(
+            *args: object, **kwargs: object
+        ) -> Any:
             with telemetry_handler.tool(
                 tool_function.__name__,
             ) as tool_invocation:
                 tool_invocation.tool_description = tool_function.__doc__
-                # Do this before calling the tool in case that crashes.
+                # Snapshot before the call: the tool may mutate its inputs.
                 if tool_invocation.should_capture_content:
-                    tool_invocation.arguments = json.dumps(
-                        _get_function_args(tool_function, args, kwargs)
+                    tool_invocation.arguments = object_to_any_value(
+                        bind_arguments(tool_function, args, kwargs)
                     )
                 result = await tool_function(*args, **kwargs)
                 if tool_invocation.should_capture_content:
-                    tool_invocation.tool_result = json.dumps(
-                        _to_otel_value(result)
-                    )
+                    tool_invocation.tool_result = object_to_any_value(result)
             return result
+
+        return async_wrapped_function
     else:
 
         @functools.wraps(tool_function)
-        def wrapped_function(*args, **kwargs):
+        def wrapped_function(*args: object, **kwargs: object) -> Any:
             with telemetry_handler.tool(
                 tool_function.__name__,
             ) as tool_invocation:
                 tool_invocation.tool_description = tool_function.__doc__
-                # Do this before calling the tool in case that crashes.
+                # Snapshot before the call: the tool may mutate its inputs.
                 if tool_invocation.should_capture_content:
-                    tool_invocation.arguments = json.dumps(
-                        _get_function_args(tool_function, args, kwargs)
+                    tool_invocation.arguments = object_to_any_value(
+                        bind_arguments(tool_function, args, kwargs)
                     )
                 result = tool_function(*args, **kwargs)
                 if tool_invocation.should_capture_content:
-                    tool_invocation.tool_result = json.dumps(
-                        _to_otel_value(result)
-                    )
+                    tool_invocation.tool_result = object_to_any_value(result)
             return result
 
     return wrapped_function

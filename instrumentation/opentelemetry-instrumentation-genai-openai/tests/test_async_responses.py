@@ -1,6 +1,8 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import importlib.util
 import inspect
 import json
@@ -20,6 +22,9 @@ from opentelemetry.instrumentation.genai.openai import OpenAIInstrumentor
 from opentelemetry.instrumentation.genai.openai.response_wrappers import (
     AsyncResponseStreamManagerWrapper,
 )
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
 from opentelemetry.semconv._incubating.attributes import (
     error_attributes as ErrorAttributes,
 )
@@ -35,8 +40,16 @@ from opentelemetry.semconv._incubating.attributes import (
 from opentelemetry.trace.status import StatusCode
 from opentelemetry.util.genai.utils import is_experimental_mode
 
-from .test_responses import assert_responses_streaming_timing_metrics
+from .test_responses import (
+    ComputerCallOutput,
+    ResponseComputerToolCall,
+    _has_computer_call_output_input_type,
+    _has_computer_tool_type,
+    _supports_computer_call_response_output,
+    assert_responses_streaming_timing_metrics,
+)
 from .test_utils import (
+    COMPUTER_SCREENSHOT_DATA_URL,
     CUSTOM_TOOL_MODEL,
     DEFAULT_MODEL,
     EXPECTED_CUSTOM_TOOL_INPUT_MESSAGES,
@@ -49,6 +62,7 @@ from .test_utils import (
     assert_cache_attributes,
     assert_fetch_response_attributes,
     assert_messages_attribute,
+    assert_reasoning_attributes,
     format_simple_expected_output_message,
     get_responses_custom_tool_definition,
     get_responses_custom_tool_loop_input,
@@ -85,7 +99,6 @@ except ImportError:
     _has_conversation_param = False
     _stream_has_service_tier = False
     _has_custom_tool_types = False
-
 
 pytestmark = pytest.mark.skipif(
     not HAS_RESPONSES_API, reason="Responses API requires a newer openai SDK"
@@ -1313,6 +1326,95 @@ async def test_async_responses_create_captures_custom_tool_history(
     )
 
 
+@pytest.mark.vcr()
+@pytest.mark.skipif(
+    not _has_computer_call_output_input_type
+    or not _has_computer_tool_type
+    or not _supports_computer_call_response_output(),
+    reason="openai SDK cannot parse the GA computer tool loop",
+)
+@pytest.mark.asyncio()
+async def test_async_responses_create_captures_computer_tool_loop(
+    span_exporter: InMemorySpanExporter,
+    async_openai_client: AsyncOpenAI,
+    instrument_with_content: OpenAIInstrumentor,
+) -> None:
+    _skip_if_not_latest()
+
+    history = [
+        {"role": "user", "content": "Take a screenshot of the current page."}
+    ]
+    first_response = await async_openai_client.responses.create(
+        model="gpt-6-luna",
+        tools=[{"type": "computer"}],
+        input=history,
+        tool_choice="required",
+    )
+    (computer_call,) = [
+        item
+        for item in first_response.output
+        if isinstance(item, ResponseComputerToolCall)
+    ]
+    await async_openai_client.responses.create(
+        model="gpt-6-luna",
+        tools=[{"type": "computer"}],
+        input=[
+            *history,
+            *first_response.output,
+            ComputerCallOutput(
+                type="computer_call_output",
+                call_id=computer_call.call_id,
+                output={
+                    "type": "computer_screenshot",
+                    "image_url": COMPUTER_SCREENSHOT_DATA_URL,
+                },
+            ),
+        ],
+    )
+
+    first_span, second_span = span_exporter.get_finished_spans()
+    assert first_span.attributes[
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ] == ("tool_calls",)
+    first_output = _load_span_messages(
+        first_span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    )
+    (tool_call,) = [
+        part
+        for message in first_output
+        for part in message["parts"]
+        if part["type"] == "tool_call"
+    ]
+    assert tool_call["name"] == "computer"
+    assert tool_call["id"] == computer_call.call_id
+    assert isinstance(tool_call["arguments"]["actions"], list)
+
+    second_input = _load_span_messages(
+        second_span, GenAIAttributes.GEN_AI_INPUT_MESSAGES
+    )
+    assert second_input[0]["role"] == "user"
+    assert second_input[1]["role"] == "assistant"
+    assert second_input[1]["parts"] == [
+        {
+            "type": "tool_call",
+            "id": computer_call.call_id,
+            "name": "computer",
+            "arguments": tool_call["arguments"],
+        }
+    ]
+    assert second_input[2]["role"] == "tool"
+    assert second_input[2]["parts"] == [
+        {
+            "type": "tool_call_response",
+            "id": computer_call.call_id,
+            "response": {
+                "type": "computer_screenshot",
+                "image_url": COMPUTER_SCREENSHOT_DATA_URL,
+            },
+        }
+    ]
+
+
 @pytest.mark.asyncio()
 @pytest.mark.skipif(
     not _has_tools_param,
@@ -1479,15 +1581,6 @@ async def test_async_responses_create_reports_reasoning_tokens(
             timeout=30.0,
         )
 
-    reasoning_tokens = getattr(
-        getattr(response.usage, "output_tokens_details", None),
-        "reasoning_tokens",
-        None,
-    )
-
-    assert reasoning_tokens is not None
-    assert reasoning_tokens > 0
-
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     (span,) = spans
@@ -1506,10 +1599,40 @@ async def test_async_responses_create_reports_reasoning_tokens(
         "stop",
     )
 
+    assert_reasoning_attributes(span, response.usage, require_reasoning=True)
+
     output_messages = _load_span_messages(
         span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
     )
     assert len(output_messages) > 0
+
+
+@pytest.mark.asyncio()
+@pytest.mark.skipif(
+    not _has_reasoning_param,
+    reason=(
+        "openai SDK too old to support 'reasoning' parameter on Responses.create"
+    ),
+)
+async def test_async_responses_create_streaming_reports_reasoning_tokens(
+    span_exporter, async_openai_client, instrument_no_content, vcr
+):
+    _skip_if_not_latest()
+
+    with vcr.use_cassette(
+        "test_async_responses_create_streaming_reports_reasoning_tokens[content_mode0].yaml"
+    ):
+        stream = await async_openai_client.responses.create(
+            model=REASONING_MODEL,
+            reasoning={"effort": "low"},
+            input=REASONING_PROMPT,
+            max_output_tokens=1000,
+            stream=True,
+        )
+        response = await _collect_completed_response(stream)
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_reasoning_attributes(span, response.usage, require_reasoning=True)
 
 
 @pytest.mark.asyncio()

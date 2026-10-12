@@ -14,6 +14,7 @@ import pytest
 from opentelemetry.instrumentation.genai.openai.utils import (
     _content_to_parts,
     _prepare_input_messages,
+    create_chat_invocation,
     get_property_value,
 )
 from opentelemetry.sdk.trace import ReadableSpan
@@ -27,6 +28,7 @@ from opentelemetry.semconv._incubating.attributes import (
     server_attributes as ServerAttributes,
 )
 from opentelemetry.trace import SpanKind
+from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.types import (
     BlobPart,
     InputMessage,
@@ -39,7 +41,9 @@ _REAL_PNG_B64 = (
     "QQ0AIAwAsSnZG4lInJxJwMRICGlyAvq9yF1PFUBAQEBAQBdAXWskICAgICAg"
     "ICAgICAgIOcKBAQEBPQd6ACUHHNEU5qggAAAAABJRU5ErkJggg=="
 )
+COMPUTER_SCREENSHOT_DATA_URL: str = f"data:image/png;base64,{_REAL_PNG_B64}"
 _REAL_PNG_BYTES = base64.b64decode(_REAL_PNG_B64)
+
 
 DEFAULT_MODEL = "gpt-4o-mini"
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
@@ -813,7 +817,9 @@ def assert_cache_attributes(span, usage, require_cache_read=False):
 
 
 def assert_reasoning_attributes(span, usage, *, require_reasoning=False):
-    details = getattr(usage, "completion_tokens_details", None)
+    details = getattr(usage, "output_tokens_details", None) or getattr(
+        usage, "completion_tokens_details", None
+    )
     reasoning_tokens = get_property_value(details, "reasoning_tokens")
     if require_reasoning:
         assert type(reasoning_tokens) is int
@@ -905,3 +911,43 @@ def test_prepare_input_messages_reduces_tool_content_to_data():
     (serialized,) = json.loads(gen_ai_json_dumps([asdict(message)]))
     (item,) = serialized["parts"][0]["response"]
     assert item["text"] == "shipped"
+
+
+@pytest.mark.parametrize(
+    "request_kwargs, expected",
+    [
+        ({"max_tokens": 50}, 50),
+        ({"max_completion_tokens": 100}, 100),
+        ({"max_tokens": 50, "max_completion_tokens": 100}, 100),
+        ({"extra_body": {"max_completion_tokens": 200}}, 200),
+        (
+            {"max_tokens": 50, "extra_body": {"max_completion_tokens": 200}},
+            50,
+        ),
+    ],
+)
+def test_chat_invocation_records_max_tokens(
+    tracer_provider,
+    meter_provider,
+    logger_provider,
+    span_exporter,
+    request_kwargs,
+    expected,
+):
+    handler = TelemetryHandler(
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+    )
+    invocation = create_chat_invocation(
+        handler,
+        {"model": DEFAULT_MODEL, **request_kwargs},
+        SimpleNamespace(),
+        capture_content=False,
+    )
+    invocation.stop()
+
+    (span,) = span_exporter.get_finished_spans()
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS] == expected
+    )

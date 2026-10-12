@@ -151,7 +151,10 @@ class TestOnChainStartWorkflow:
         )
 
         telemetry.workflow.assert_called_once_with(
-            name="MyLangGraph", context=None, _attach_to_context=True
+            name="MyLangGraph",
+            context=None,
+            conversation_id=None,
+            _attach_to_context=True,
         )
 
     def test_workflow_name_overridden_by_metadata(self):
@@ -167,11 +170,14 @@ class TestOnChainStartWorkflow:
         )
 
         telemetry.workflow.assert_called_once_with(
-            name="custom_workflow", context=None, _attach_to_context=True
+            name="custom_workflow",
+            context=None,
+            conversation_id=None,
+            _attach_to_context=True,
         )
 
     def test_workflow_conversation_id_from_metadata(self):
-        handler, _, workflow_inv, _ = _make_handler()
+        handler, telemetry, _, _ = _make_handler()
         run_id = _run_id()
 
         handler.on_chain_start(
@@ -182,7 +188,7 @@ class TestOnChainStartWorkflow:
             metadata={"thread_id": "t1"},
         )
 
-        assert workflow_inv.conversation_id == "t1"
+        assert telemetry.workflow.call_args.kwargs["conversation_id"] == "t1"
 
     def test_workflow_registered_in_invocation_manager(self):
         handler, _, workflow_inv, _ = _make_handler()
@@ -223,6 +229,7 @@ class TestOnChainStartWorkflow:
         telemetry.invoke_local_agent.assert_called_once_with(
             agent_name="math_agent",
             context=workflow_inv.context,
+            conversation_id=None,
             _attach_to_context=True,
         )
 
@@ -248,6 +255,7 @@ class TestOnChainStartAgent:
         telemetry.invoke_local_agent.assert_called_once_with(
             agent_name="math_agent",
             context=None,
+            conversation_id=None,
             _attach_to_context=True,
         )
         assert (
@@ -277,15 +285,15 @@ class TestOnChainStartAgent:
         telemetry.invoke_local_agent.assert_called_once_with(
             agent_name="AgentExecutor",
             context=None,
+            conversation_id="thread-abc",
             _attach_to_context=True,
         )
-        assert agent_inv.conversation_id == "thread-abc"
         assert agent_inv.input_messages[0].parts[0].content == "Solve this"
         assert agent_inv.output_messages[0].parts[0].content == "Solved"
         agent_inv.stop.assert_called_once_with()
 
     def test_agent_metadata_set(self):
-        handler, _, _, agent_inv = _make_handler()
+        handler, telemetry, _, agent_inv = _make_handler()
         run_id = _run_id()
 
         handler.on_chain_start(
@@ -303,10 +311,13 @@ class TestOnChainStartAgent:
 
         assert agent_inv.agent_id is None
         assert agent_inv.agent_description == "does math"
-        assert agent_inv.conversation_id == "thread-abc"
+        assert (
+            telemetry.invoke_local_agent.call_args.kwargs["conversation_id"]
+            == "thread-abc"
+        )
 
     def test_conversation_id_prefers_thread_id_over_session_id(self):
-        handler, _, _, agent_inv = _make_handler()
+        handler, telemetry, _, _ = _make_handler()
         run_id = _run_id()
 
         handler.on_chain_start(
@@ -321,11 +332,14 @@ class TestOnChainStartAgent:
             },
         )
 
-        assert agent_inv.conversation_id == "t1"
+        assert (
+            telemetry.invoke_local_agent.call_args.kwargs["conversation_id"]
+            == "t1"
+        )
 
     def test_conversation_id_prefers_session_id_over_conversation_id(self):
         """thread_id > session_id > conversation_id is the resolution order."""
-        handler, _, _, agent_inv = _make_handler()
+        handler, telemetry, _, _ = _make_handler()
         run_id = _run_id()
 
         handler.on_chain_start(
@@ -340,7 +354,10 @@ class TestOnChainStartAgent:
             },
         )
 
-        assert agent_inv.conversation_id == "s1"
+        assert (
+            telemetry.invoke_local_agent.call_args.kwargs["conversation_id"]
+            == "s1"
+        )
 
     def test_duplicate_agent_name_does_not_create_new_span(self):
         """When the nearest ancestor already has the same agent name, no new
@@ -519,7 +536,7 @@ class TestOnChatModelStartConversationId:
             invocation_params={"model_name": "gpt-4"},
         )
 
-        assert telemetry.inference.return_value.conversation_id == "t1"
+        assert telemetry.inference.call_args.kwargs["conversation_id"] == "t1"
 
     def test_no_conversation_id_available(self):
         handler, telemetry, _, _ = _make_handler()
@@ -534,7 +551,7 @@ class TestOnChatModelStartConversationId:
             invocation_params={"model_name": "gpt-4"},
         )
 
-        assert telemetry.inference.return_value.conversation_id is None
+        assert telemetry.inference.call_args.kwargs["conversation_id"] is None
 
     def test_chat_model_passes_parent_context_to_telemetry_handler(self):
         handler, telemetry, _, _ = _make_handler()
@@ -559,6 +576,7 @@ class TestOnChatModelStartConversationId:
             "openai",
             request_model="gpt-4",
             context=parent_wf.context,
+            conversation_id=None,
             _attach_to_context=True,
         )
 
@@ -746,6 +764,7 @@ class TestAgentAncestryPublicBehavior:
         telemetry.invoke_local_agent.assert_called_once_with(
             agent_name="math_agent",
             context=workflow_inv.context,
+            conversation_id=None,
             _attach_to_context=True,
         )
 
@@ -1430,6 +1449,128 @@ class TestOnLlmEndToolCalls:
         assigned: list[OutputMessage] = llm_inv.output_messages
         assert len(assigned) == 1
         assert assigned[0].name == "tool_caller_bot"
+
+    def test_ollama_done_reason_preserves_tool_calls(self):
+        """ChatOllama reports its stop reason as `done_reason` and sets no
+        `finish_reason`/`stop_reason`. The tool-call parts must still be
+        recorded rather than dropped because the finish reason resolves to
+        `"error"`.
+        """
+        run_id = _run_id()
+        handler, telemetry, llm_inv = _make_handler_with_llm_invocation(run_id)
+        telemetry.should_capture_content.return_value = True
+
+        tool_call = {
+            "name": "get_weather",
+            "id": "call_ollama_1",
+            "args": {"city": "Seattle"},
+        }
+        # ChatOllama publishes the stop reason under `done_reason` only.
+        ai_msg = AIMessage(
+            content="", tool_calls=[tool_call], response_metadata={}
+        )
+        gen = ChatGeneration(
+            message=ai_msg, generation_info={"done_reason": "stop"}
+        )
+        response = LLMResult(generations=[[gen]])
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        assigned: list[OutputMessage] = llm_inv.output_messages
+        assert len(assigned) == 1
+        assert len(assigned[0].parts) == 1
+        part = assigned[0].parts[0]
+        assert isinstance(part, ToolCallRequestPart)
+        assert part.name == "get_weather"
+        assert part.id == "call_ollama_1"
+        assert part.arguments == {"city": "Seattle"}
+        # done_reason must resolve finish_reason to "stop", not "error".
+        assert assigned[0].finish_reason == "stop"
+        assert llm_inv.finish_reasons == ["stop"]
+
+    def test_response_with_both_text_and_tool_calls_preserves_both(self):
+        """A response carrying both assistant text and tool calls must
+        keep both: gating only on tool calls previously dropped the text.
+        """
+        run_id = _run_id()
+        handler, telemetry, llm_inv = _make_handler_with_llm_invocation(run_id)
+        telemetry.should_capture_content.return_value = True
+
+        tool_call = {
+            "name": "get_weather",
+            "id": "call_1",
+            "args": {"city": "Seattle"},
+        }
+        ai_msg = AIMessage(
+            content="Checking the weather...",
+            tool_calls=[tool_call],
+            response_metadata={},
+        )
+        gen = ChatGeneration(
+            message=ai_msg, generation_info={"finish_reason": "tool_calls"}
+        )
+        response = LLMResult(generations=[[gen]])
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        assigned: list[OutputMessage] = llm_inv.output_messages
+        assert len(assigned) == 1
+        assert len(assigned[0].parts) == 2
+        assert isinstance(assigned[0].parts[0], TextPart)
+        assert assigned[0].parts[0].content == "Checking the weather..."
+        assert isinstance(assigned[0].parts[1], ToolCallRequestPart)
+        assert assigned[0].parts[1].name == "get_weather"
+
+    def test_content_capture_disabled_skips_output_message_but_keeps_finish_reason(
+        self,
+    ):
+        """With content capture off, no output message is built (so an
+        image payload is never decoded), but finish reasons are still
+        recorded."""
+        run_id = _run_id()
+        handler, telemetry, llm_inv = _make_handler_with_llm_invocation(run_id)
+        telemetry.should_capture_content.return_value = False
+
+        ai_msg = AIMessage(
+            content="Checking the weather...",
+            tool_calls=[
+                {"name": "get_weather", "id": "c1", "args": {"city": "X"}}
+            ],
+            response_metadata={},
+        )
+        gen = ChatGeneration(
+            message=ai_msg, generation_info={"finish_reason": "tool_calls"}
+        )
+        response = LLMResult(generations=[[gen]])
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        # No output message recorded when capture is disabled ...
+        assert llm_inv.output_messages == []
+        # ... but the finish reason is still collected.
+        assert llm_inv.finish_reasons == ["tool_calls"]
+
+    def test_no_tool_calls_still_records_text(self):
+        """A response with no tool calls keeps recording its text content,
+        independent of the finish-reason spelling.
+        """
+        run_id = _run_id()
+        handler, _, llm_inv = _make_handler_with_llm_invocation(run_id)
+
+        ai_msg = AIMessage(content="Sunny, 18C", response_metadata={})
+        gen = ChatGeneration(
+            message=ai_msg, generation_info={"done_reason": "stop"}
+        )
+        response = LLMResult(generations=[[gen]])
+
+        handler.on_llm_end(response=response, run_id=run_id)
+
+        assigned: list[OutputMessage] = llm_inv.output_messages
+        assert len(assigned) == 1
+        assert len(assigned[0].parts) == 1
+        part = assigned[0].parts[0]
+        assert isinstance(part, TextPart)
+        assert part.content == "Sunny, 18C"
 
 
 # ---------------------------------------------------------------------------
@@ -3461,7 +3602,10 @@ def test_explicit_attach_to_context_false():
     )
 
     telemetry.workflow.assert_called_once_with(
-        name="LangGraph", context=None, _attach_to_context=False
+        name="LangGraph",
+        context=None,
+        conversation_id=None,
+        _attach_to_context=False,
     )
 
 
@@ -3481,7 +3625,10 @@ def test_sync_defaults_attach_to_context_true():
     )
 
     telemetry.workflow.assert_called_once_with(
-        name="LangGraph", context=None, _attach_to_context=True
+        name="LangGraph",
+        context=None,
+        conversation_id=None,
+        _attach_to_context=True,
     )
 
 
