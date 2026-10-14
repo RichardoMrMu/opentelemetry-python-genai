@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import logging
 import os
 from collections.abc import AsyncIterable, Callable, Iterable
 from typing import Any
@@ -51,6 +52,8 @@ from .message import (
     to_system_instructions,
 )
 from .tool_call_wrapper import wrapped_tool
+
+_logger = logging.getLogger(__name__)
 
 
 def _normalize_to_list_if_tuple(value: Any) -> Any:
@@ -394,7 +397,11 @@ def _wrapped_config_with_tools(
         try:
             config = GenerateContentConfig.model_validate(config)
         except Exception:
-            return GenerateContentConfig(), True
+            _logger.warning(
+                "Unable to parse GenerateContentConfig, passing the config "
+                "through unchanged and skipping request config attributes."
+            )
+            return GenerateContentConfig(), False
     if not config.tools:
         return config, False
     config.tools = [
