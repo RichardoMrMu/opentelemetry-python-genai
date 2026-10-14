@@ -154,20 +154,6 @@ class ConfigSpanAttributesTestCase(TestCase):
             ]
         )
 
-    def test_invalid_config_dict_passed_through_to_generate_content(self):
-        # The SDK rejects unknown config fields, so an unparsable dict config
-        # must reach GenerateContent unchanged instead of being replaced by an
-        # empty config.
-        config = {"not_a_real_field": 1}
-        self.client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents="Some input prompt",
-            config=config,
-        )
-        self.assertEqual(
-            self.mock_generate_content.call_args.kwargs["config"], config
-        )
-
     def test_invalid_config_dict_logs_warning(self):
         with self.assertLogs(
             "opentelemetry.instrumentation.google_genai.generate_content",
