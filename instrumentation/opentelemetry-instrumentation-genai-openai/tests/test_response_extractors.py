@@ -145,13 +145,7 @@ _supports_computer_tool_actions: bool = _response_accepts_output_item(
 
 
 class _RawResponse:
-    """A ``with_raw_response`` result: raw body plus a ``parse()`` tripwire.
-
-    Telemetry is expected to read the body the raw response already
-    carries, never to call ``parse()``: that runs the caller's own
-    ``text_format`` post-parser and validators while the API call is
-    still in flight.
-    """
+    """A ``with_raw_response`` result: raw body plus a ``parse()`` tripwire."""
 
     def __init__(self, parsed_response):
         self.headers = {"x-ms-served-model": "served-gpt-4.1"}
@@ -1400,6 +1394,29 @@ def test_extract_output_type_handles_text_format_mapping(loaded_module):
         is None
     )
     assert loaded_module.extract_params(text="plain").output_type is None
+
+
+def test_extract_params_output_type_from_text_format(loaded_module):
+    class _Event(BaseModel):
+        name: str
+
+    assert (
+        loaded_module.extract_params(text_format=_Event).output_type == "json"
+    )
+    assert (
+        loaded_module.extract_params(text_format=_Event(name="x")).output_type
+        is None
+    )
+    assert loaded_module.extract_params(text_format=None).output_type is None
+    assert (
+        loaded_module.extract_params(text_format="Event").output_type is None
+    )
+    assert (
+        loaded_module.extract_params(
+            text={"format": {"type": "text"}}, text_format=_Event
+        ).output_type
+        == "text"
+    )
 
 
 def test_extract_conversation_id_handles_supported_shapes(loaded_module):

@@ -1770,16 +1770,13 @@ async def test_async_responses_parse_basic(
         span.attributes[OpenAIAttributes.OPENAI_API_TYPE]
         == OpenAIAttributes.OpenaiApiTypeValues.RESPONSES.value
     )
-    # parse(text_format=...) is a structured-output call, so the span records
-    # the JSON output type -- but only the format metadata, never the caller's
-    # Pydantic schema (issue #659).
+    # parse(text_format=...) records the JSON output type, not the schema.
     _assert_request_attrs(span, output_type="json")
     assert "_AsyncParseCalendarEvent" not in str(span.attributes)
 
 
 class _AsyncMissingFieldCalendarEvent(BaseModel):
-    # The recorded response never carries this field, so parsing its raw
-    # response fails -- but only when the caller parses it.
+    # Absent from the recorded body, so parsing it must fail.
     field_that_is_never_present: str
 
 
@@ -1791,12 +1788,7 @@ class _AsyncMissingFieldCalendarEvent(BaseModel):
 async def test_async_responses_with_raw_response_parse_defers_validation(
     span_exporter, async_openai_client, instrument_no_content, vcr
 ):
-    """``with_raw_response.parse()`` keeps validation deferred (async).
-
-    Mirrors the sync test: the instrumentation must not force the SDK's
-    parse while extracting telemetry, so the raw response is returned and
-    validation happens only when the caller parses it.
-    """
+    """``with_raw_response.parse()`` keeps validation deferred (async)."""
     _skip_if_not_latest()
 
     with vcr.use_cassette(
@@ -1827,3 +1819,74 @@ async def test_async_responses_with_raw_response_parse_defers_validation(
         # Validation still happens only when the caller parses.
         with pytest.raises(ValidationError):
             raw_response.parse()
+
+
+@pytest.mark.skipif(
+    not _HAS_RESPONSES_PARSE,
+    reason="AsyncResponses.parse requires a newer openai SDK",
+)
+@pytest.mark.asyncio()
+async def test_async_responses_with_raw_response_parse_captures_content(
+    span_exporter, async_openai_client, instrument_with_content, vcr
+):
+    """Content capture works for raw-response parse calls (async)."""
+    _skip_if_not_latest()
+
+    with vcr.use_cassette(
+        "test_async_responses_parse_basic[content_mode0].yaml"
+    ):
+        await async_openai_client.responses.with_raw_response.parse(
+            model=DEFAULT_MODEL,
+            instructions=SYSTEM_INSTRUCTIONS,
+            input=USER_ONLY_PROMPT[0]["content"],
+            text_format=_AsyncMissingFieldCalendarEvent,
+            stream=False,
+        )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert_all_attributes(
+        span,
+        DEFAULT_MODEL,
+        True,
+        "resp_0f4faba17dcd0f1e0069e2f3e4907881909179832ba1237100",
+        "gpt-4o-mini-2024-07-18",
+        22,
+        6,
+        response_service_tier="default",
+    )
+    output_messages = _load_span_messages(
+        span, GenAIAttributes.GEN_AI_OUTPUT_MESSAGES
+    )
+    assert "science fair" in json.dumps(output_messages)
+
+
+@pytest.mark.skipif(
+    not _HAS_RESPONSES_PARSE,
+    reason="AsyncResponses.parse requires a newer openai SDK",
+)
+@pytest.mark.asyncio()
+async def test_async_responses_parse_api_error(
+    span_exporter, async_openai_client, instrument_no_content, vcr
+):
+    """A parse call that fails at the API level still records telemetry."""
+    _skip_if_not_latest()
+
+    with vcr.use_cassette(
+        "test_async_responses_create_api_error[content_mode0].yaml"
+    ):
+        with pytest.raises((BadRequestError, NotFoundError)) as exc_info:
+            await async_openai_client.responses.parse(
+                model=INVALID_MODEL,
+                input="Hello",
+                text_format=_AsyncParseCalendarEvent,
+                stream=False,
+            )
+
+    (span,) = span_exporter.get_finished_spans()
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == INVALID_MODEL
+    )
+    assert (
+        span.attributes[ErrorAttributes.ERROR_TYPE]
+        == f"openai.{type(exc_info.value).__name__}"
+    )

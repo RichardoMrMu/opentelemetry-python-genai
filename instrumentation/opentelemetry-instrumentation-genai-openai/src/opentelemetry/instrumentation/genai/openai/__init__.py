@@ -104,6 +104,18 @@ def _is_parse_supported():
         return False
 
 
+def _is_responses_parse_supported() -> bool:
+    """Check if parse() is available on the Responses class."""
+    try:
+        from openai.resources.responses.responses import (  # pylint: disable=import-outside-toplevel
+            Responses,
+        )
+
+        return hasattr(Responses, "parse")
+    except ImportError:
+        return False
+
+
 class OpenAIInstrumentor(BaseInstrumentor):
     # BaseInstrumentor is a singleton and __init__ re-runs on the existing
     # instance, so these defaults live on the class instead of in __init__.
@@ -229,25 +241,18 @@ class OpenAIInstrumentor(BaseInstrumentor):
                 self._active(async_responses_retrieve(handler)),
             )
 
-            # parse() is the Responses API structured-output helper. Like
-            # chat.completions.parse it maps to the same inference operation
-            # as create() -- the telemetry-relevant request/response fields
-            # are identical and its ParsedResponse result is already handled
-            # by the create wrappers -- but it does not delegate to the
-            # instrumented create(), so it must be wrapped separately (#659).
-            self._responses_parse_supported = hasattr(
-                responses_module.Responses, "parse"
-            )
+            # parse() does not go through the instrumented create().
+            self._responses_parse_supported = _is_responses_parse_supported()
             if self._responses_parse_supported:
                 wrap_function_wrapper(
                     "openai.resources.responses.responses",
                     "Responses.parse",
-                    responses_create(handler),
+                    self._active(responses_create(handler)),
                 )
                 wrap_function_wrapper(
                     "openai.resources.responses.responses",
                     "AsyncResponses.parse",
-                    async_responses_create(handler),
+                    self._active(async_responses_create(handler)),
                 )
 
     def _uninstrument(self, **kwargs):

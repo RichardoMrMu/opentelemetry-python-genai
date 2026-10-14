@@ -1798,15 +1798,7 @@ class _ParseCalendarEvent(BaseModel):
 def test_responses_parse_basic(
     span_exporter, openai_client, instrument_no_content, vcr
 ):
-    """Responses.parse() emits a GenAI span like create().
-
-    parse() is the structured-output helper. It does not delegate to the
-    instrumented create(), so it is wrapped separately (#659), but it maps to
-    the same inference operation as create() -- the request/response fields
-    are identical -- exactly as chat.completions.parse reuses the completions
-    create wrapper. The recorded response body is valid structured JSON so
-    the SDK can materialize the ``text_format`` model.
-    """
+    """Responses.parse() emits a GenAI span like create()."""
     _skip_if_not_latest()
 
     with vcr.use_cassette("test_responses_parse_basic[content_mode0].yaml"):
@@ -1833,9 +1825,7 @@ def test_responses_parse_basic(
         span.attributes[OpenAIAttributes.OPENAI_API_TYPE]
         == OpenAIAttributes.OpenaiApiTypeValues.RESPONSES.value
     )
-    # parse(text_format=...) is a structured-output call, so the span records
-    # the JSON output type -- but only the format metadata, never the caller's
-    # Pydantic schema (issue #659).
+    # parse(text_format=...) records the JSON output type, not the schema.
     _assert_request_attrs(span, output_type="json")
     assert "_ParseCalendarEvent" not in str(span.attributes)
 
@@ -1847,8 +1837,7 @@ def test_responses_parse_basic(
 def test_responses_parse_wrapping_lifecycle(
     tracer_provider, logger_provider, meter_provider
 ):
-    """instrument() wraps Responses.parse / AsyncResponses.parse and
-    uninstrument() restores them."""
+    """instrument() wraps parse() and uninstrument() restores it."""
     from openai.resources.responses.responses import (  # pylint: disable=no-name-in-module
         AsyncResponses,
         Responses,
@@ -1878,13 +1867,7 @@ def test_responses_parse_wrapping_lifecycle(
 def test_responses_create_output_type_unchanged_by_parse(
     span_exporter, openai_client, instrument_no_content, vcr
 ):
-    """Responses.create() behaviour is unchanged by the parse() wrapper.
-
-    ``create`` carries no ``text_format``, so reusing the ``responses_create``
-    wrapper for ``parse`` must not start reporting ``gen_ai.output.type`` for a
-    plain text call (regression guard for issue #659). Reuses the existing
-    create cassette -- VCR does not match on the request body.
-    """
+    """Responses.create() behaviour is unchanged by the parse() wrapper."""
     _skip_if_not_latest()
 
     with vcr.use_cassette("test_responses_create_basic[content_mode0].yaml"):
@@ -1910,8 +1893,7 @@ def test_responses_create_output_type_unchanged_by_parse(
 
 
 class _MissingFieldCalendarEvent(BaseModel):
-    # The recorded response never carries this field, so parsing its raw
-    # response fails -- but only when the caller parses it.
+    # Absent from the recorded body, so parsing it must fail.
     field_that_is_never_present: str
 
 
@@ -1922,14 +1904,7 @@ class _MissingFieldCalendarEvent(BaseModel):
 def test_responses_with_raw_response_parse_defers_validation(
     span_exporter, openai_client, instrument_no_content, vcr
 ):
-    """``with_raw_response.parse()`` keeps validation deferred.
-
-    The instrumentation extracts telemetry from the raw JSON body instead of
-    forcing the SDK's parse: calling it would run the caller's ``text_format``
-    post-parser (including their Pydantic validators) during the API call and
-    raise there, where the uninstrumented SDK returns the raw response and
-    raises only when the caller parses it.
-    """
+    """``with_raw_response.parse()`` keeps validation deferred."""
     _skip_if_not_latest()
 
     with vcr.use_cassette("test_responses_parse_basic[content_mode0].yaml"):
@@ -1941,8 +1916,7 @@ def test_responses_with_raw_response_parse_defers_validation(
             stream=False,
         )
 
-        # The raw response comes back untouched and telemetry is already
-        # recorded from the raw body.
+        # The raw response comes back untouched; telemetry is already recorded.
         (span,) = span_exporter.get_finished_spans()
         assert_all_attributes(
             span,
@@ -1967,12 +1941,7 @@ def test_responses_with_raw_response_parse_defers_validation(
 def test_responses_with_raw_response_parse_captures_content(
     span_exporter, openai_client, instrument_with_content, vcr
 ):
-    """Content capture works for raw-response parse calls.
-
-    Telemetry, including the captured output messages, is extracted from the
-    raw body even when the caller never parses the raw response -- the
-    extraction must not depend on the SDK's parse running.
-    """
+    """Content capture works for raw-response parse calls."""
     _skip_if_not_latest()
 
     with vcr.use_cassette("test_responses_parse_basic[content_mode0].yaml"):
@@ -2008,11 +1977,7 @@ def test_responses_with_raw_response_parse_captures_content(
 def test_responses_parse_api_error(
     span_exporter, openai_client, instrument_no_content, vcr
 ):
-    """A parse call that fails at the API level still records telemetry.
-
-    Error responses never carry structured output, so ``error.type`` must be
-    recorded without any raw-response parsing.
-    """
+    """A parse call that fails at the API level still records telemetry."""
     _skip_if_not_latest()
 
     with vcr.use_cassette(
