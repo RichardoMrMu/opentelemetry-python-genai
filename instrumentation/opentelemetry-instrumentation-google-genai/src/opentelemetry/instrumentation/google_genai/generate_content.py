@@ -397,7 +397,7 @@ def _wrapped_config_with_tools(
         try:
             config = GenerateContentConfig.model_validate(config)
         except Exception:
-            _logger.warning(
+            _logger.debug(
                 "Unable to parse GenerateContentConfig, passing the config "
                 "through unchanged and skipping request config attributes."
             )
