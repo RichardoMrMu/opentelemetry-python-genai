@@ -114,13 +114,6 @@ async def test_stream_activates_only_during_reads(
 
 
 class _CloseAssertingStream:
-    """Stream that checks the inference span while the wrapper closes it.
-
-    The close path runs the underlying ``close``/``aclose`` inside the
-    invocation context the wrapper restores, so the span that is current there
-    must be the inference span -- including when the caller closes before the
-    first read.
-    """
 
     def __init__(self, chunks: list[Any], invocation: Any) -> None:
         self._chunks = list(chunks)
