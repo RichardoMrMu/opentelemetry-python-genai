@@ -114,7 +114,6 @@ async def test_stream_activates_only_during_reads(
 
 
 class _CloseAssertingStream:
-
     def __init__(self, chunks: list[Any], invocation: Any) -> None:
         self._chunks = list(chunks)
         self._invocation = invocation
