@@ -178,6 +178,7 @@ def _mock_http(
                 # ``.usage`` access) while satisfying the required envelope.
                 body = {"success": True, "data": body, "warning": None, **body}
             return httpx.Response(200, json=body, request=request)
+
         def _sse_payload(usage):
             payload = {
                 **body,
@@ -201,9 +202,7 @@ def _mock_http(
             return payload
 
         chunks = [
-            ("data: " + json.dumps(_sse_payload(usage)) + "
-
-").encode()
+            ("data: " + json.dumps(_sse_payload(usage)) + "\n\n").encode()
             for usage in usages
         ]
         return httpx.Response(
