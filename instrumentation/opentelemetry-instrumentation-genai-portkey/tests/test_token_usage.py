@@ -252,9 +252,7 @@ def _usage_attributes(
             id="cache-without-nested-details",
         ),
         pytest.param(_AUDIO_USAGE, _AUDIO_ATTRIBUTES, id="audio"),
-        pytest.param(
-            _IMAGE_OUTPUT_USAGE, _IMAGE_OUTPUT_ATTRIBUTES, id="image-output"
-        ),
+        pytest.param(_IMAGE_OUTPUT_USAGE, _IMAGE_OUTPUT_ATTRIBUTES, id="image-output"),
         pytest.param(_OPENAI_USAGE, _OPENAI_ATTRIBUTES, id="openai-details"),
         pytest.param(
             {**_TOTALS, "completion_tokens_details": {"reasoning_tokens": 7}},
@@ -279,9 +277,7 @@ async def test_sdk_detailed_usage(
 ) -> None:
     _mock_http(monkeypatch, [usage, usage, None])
     client_type = (
-        getattr(portkey_ai, "AsyncPortkey")
-        if asynchronous
-        else portkey_ai.Portkey
+        getattr(portkey_ai, "AsyncPortkey") if asynchronous else portkey_ai.Portkey
     )
     client = client_type(
         api_key="test-key",
@@ -303,9 +299,7 @@ async def test_sdk_detailed_usage(
 
     if streaming:
         assert not span_exporter.get_finished_spans()
-        chunks = (
-            [chunk async for chunk in result] if asynchronous else list(result)
-        )
+        chunks = [chunk async for chunk in result] if asynchronous else list(result)
         assert len(chunks) == 3
         assert all(chunk.id == "completion-test" for chunk in chunks)
     else:
@@ -334,9 +328,7 @@ async def test_sdk_detailed_usage(
     [
         pytest.param(_CACHE_USAGE, _CACHE_ATTRIBUTES, id="cache"),
         pytest.param(_AUDIO_USAGE, _AUDIO_ATTRIBUTES, id="audio"),
-        pytest.param(
-            _IMAGE_OUTPUT_USAGE, _IMAGE_OUTPUT_ATTRIBUTES, id="image-output"
-        ),
+        pytest.param(_IMAGE_OUTPUT_USAGE, _IMAGE_OUTPUT_ATTRIBUTES, id="image-output"),
         pytest.param(_OPENAI_USAGE, _OPENAI_ATTRIBUTES, id="openai-details"),
     ],
 )
@@ -354,9 +346,7 @@ async def test_stream_errors_preserve_detailed_usage(
     error = ConnectionError("stream failed")
     _mock_http(monkeypatch, [usage], error if error_source == "sdk" else None)
     client_type = (
-        getattr(portkey_ai, "AsyncPortkey")
-        if asynchronous
-        else portkey_ai.Portkey
+        getattr(portkey_ai, "AsyncPortkey") if asynchronous else portkey_ai.Portkey
     )
     client = client_type(
         api_key="test-key",
@@ -403,9 +393,7 @@ def test_invalid_detailed_counts_are_omitted(
     invalid: object,
 ) -> None:
     handler = TelemetryHandler(tracer_provider=tracer_provider)
-    with handler.inference(
-        "portkey", request_model="test-model"
-    ) as invocation:
+    with handler.inference("portkey", request_model="test-model") as invocation:
         set_usage_properties(
             invocation,
             {
@@ -444,9 +432,7 @@ def test_invalid_aggregate_counts_do_not_replace_valid_usage(
     as_object: bool,
 ) -> None:
     handler = TelemetryHandler(tracer_provider=tracer_provider)
-    with handler.inference(
-        "portkey", request_model="test-model"
-    ) as invocation:
+    with handler.inference("portkey", request_model="test-model") as invocation:
         if previous_counts:
             set_usage_properties(invocation, _TOTALS)
         usage = {
@@ -473,13 +459,9 @@ def test_zero_aggregate_counts_replace_previous_totals(
     tracer_provider: TracerProvider, span_exporter: InMemorySpanExporter
 ) -> None:
     handler = TelemetryHandler(tracer_provider=tracer_provider)
-    with handler.inference(
-        "portkey", request_model="test-model"
-    ) as invocation:
+    with handler.inference("portkey", request_model="test-model") as invocation:
         set_usage_properties(invocation, _TOTALS)
-        set_usage_properties(
-            invocation, {"prompt_tokens": 0, "completion_tokens": 0}
-        )
+        set_usage_properties(invocation, {"prompt_tokens": 0, "completion_tokens": 0})
         assert invocation.input_tokens == 0
         assert invocation.output_tokens == 0
     assert _usage_attributes(span_exporter) == {
@@ -492,9 +474,7 @@ def test_partial_usage_snapshots_preserve_previous_counts(
     tracer_provider: TracerProvider, span_exporter: InMemorySpanExporter
 ) -> None:
     handler = TelemetryHandler(tracer_provider=tracer_provider)
-    with handler.inference(
-        "portkey", request_model="test-model"
-    ) as invocation:
+    with handler.inference("portkey", request_model="test-model") as invocation:
         set_usage_properties(
             invocation,
             SimpleNamespace(
@@ -538,9 +518,7 @@ def test_zero_details_replace_previous_counts_without_cache_fallback(
     tracer_provider: TracerProvider, span_exporter: InMemorySpanExporter
 ) -> None:
     handler = TelemetryHandler(tracer_provider=tracer_provider)
-    with handler.inference(
-        "portkey", request_model="test-model"
-    ) as invocation:
+    with handler.inference("portkey", request_model="test-model") as invocation:
         set_usage_properties(invocation, _IMAGE_OUTPUT_USAGE)
         set_usage_properties(invocation, _OPENAI_USAGE)
         set_usage_properties(
@@ -587,9 +565,7 @@ def test_reasoning_usage_updates_preserve_valid_counts(
     expected: int,
 ) -> None:
     handler = TelemetryHandler(tracer_provider=tracer_provider)
-    with handler.inference(
-        "portkey", request_model="test-model"
-    ) as invocation:
+    with handler.inference("portkey", request_model="test-model") as invocation:
         set_usage_properties(invocation, _OPENAI_USAGE)
         set_usage_properties(
             invocation,
@@ -602,4 +578,3 @@ def test_reasoning_usage_updates_preserve_valid_counts(
     else:
         expected_attributes.pop("gen_ai.usage.reasoning.output_tokens")
     assert _usage_attributes(span_exporter) == expected_attributes
-
