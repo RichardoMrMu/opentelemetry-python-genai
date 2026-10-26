@@ -178,25 +178,32 @@ def _mock_http(
                 # ``.usage`` access) while satisfying the required envelope.
                 body = {"success": True, "data": body, "warning": None, **body}
             return httpx.Response(200, json=body, request=request)
-        chunks = [
-            (
-                "data: "
-                + json.dumps(
+        def _sse_payload(usage):
+            payload = {
+                **body,
+                "object": "chat.completion.chunk",
+                "choices": [
                     {
-                        **body,
-                        "object": "chat.completion.chunk",
-                        "choices": [
-                            {
-                                "index": 0,
-                                "delta": {"content": "reply"},
-                                "finish_reason": None,
-                            }
-                        ],
-                        "usage": usage,
+                        "index": 0,
+                        "delta": {"content": "reply"},
+                        "finish_reason": None,
                     }
-                )
-                + "\n\n"
-            ).encode()
+                ],
+                "usage": usage,
+            }
+            if _PORTKEY_NEEDS_ENVELOPE:
+                payload = {
+                    "success": True,
+                    "data": payload,
+                    "warning": None,
+                    **payload,
+                }
+            return payload
+
+        chunks = [
+            ("data: " + json.dumps(_sse_payload(usage)) + "
+
+").encode()
             for usage in usages
         ]
         return httpx.Response(
