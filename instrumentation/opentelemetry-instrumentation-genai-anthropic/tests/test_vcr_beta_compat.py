@@ -62,10 +62,22 @@ def test_unrelated_query_parameter_still_blocks_matching(tmp_path):
 def test_recorded_response_is_replayed_unchanged(tmp_path):
     # Responses (not just requests) are untouched: no body or status rewriting.
     with _open_cassette(tmp_path) as cassette:
-        request = VCRRequest("POST", "https://api.anthropic.com/v1/messages", b"{}", {})
+        request = VCRRequest(
+            "POST", "https://api.anthropic.com/v1/messages", b"{}", {}
+        )
         assert cassette.can_play_response_for(request)
         response = cassette.play_response(request)
-        body = response["body"]["string"] if isinstance(response, dict) else response.body
-        assert "ok" in body.decode() if isinstance(body, bytes) else "ok" in body
-        status = response["status"] if isinstance(response, dict) else response.status
+        body = (
+            response["body"]["string"]
+            if isinstance(response, dict)
+            else response.body
+        )
+        assert (
+            "ok" in body.decode() if isinstance(body, bytes) else "ok" in body
+        )
+        status = (
+            response["status"]
+            if isinstance(response, dict)
+            else response.status
+        )
         assert status["code"] == 200
